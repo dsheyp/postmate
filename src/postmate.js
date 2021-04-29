@@ -91,6 +91,7 @@ export const resolveValue = (model, property) => {
  * @param {Object} info Information on the consumer
  */
 export class ParentAPI {
+	
   constructor (info) {
     this.parent = info.parent
     this.frame = info.frame
@@ -170,6 +171,20 @@ export class ParentAPI {
     }
     this.events[eventName].push(callback)
   }
+  
+	off (eventName, callback) {
+  	let index = -1;
+    if (this.events[eventName] && (index = this.events[eventName].indexOf(callback)) > -1) {
+      this.events[eventName].splice(index, 1);
+    }
+  }
+  
+  deconnect () {
+    if (process.env.NODE_ENV !== 'production') {
+      log('Parent: Deconnecting Postmate instance')
+    }
+    window.removeEventListener('message', this.listener, false)
+  }
 
   destroy () {
     if (process.env.NODE_ENV !== 'production') {
@@ -185,6 +200,7 @@ export class ParentAPI {
  * @param {Object} info Information on the consumer
  */
 export class ChildAPI {
+	
   constructor (info) {
     this.model = info.model
     this.parent = info.parent
@@ -265,16 +281,16 @@ class Postmate {
     model,
     url,
     name,
-    classListArray = [],
+    classListArray = []
   }) { // eslint-disable-line no-undef
-    this.parent = window
-    this.frame = document.createElement('iframe')
-    this.frame.name = name || ''
-    this.frame.classList.add.apply(this.frame.classList, classListArray)
-    container.appendChild(this.frame)
-    this.child = this.frame.contentWindow || this.frame.contentDocument.parentWindow
-    this.model = model || {}
-
+  	this.parent = window
+  	this.frame = document.createElement('iframe')
+  	this.frame.name = name || ''
+  	this.frame.classList.add.apply(this.frame.classList, classListArray)
+  	container.appendChild(this.frame)
+  	this.child = this.frame.contentWindow || this.frame.contentDocument.parentWindow
+  	this.model = model || {}
+		
     return this.sendHandshake(url)
   }
 
@@ -284,9 +300,13 @@ class Postmate {
    * @return {Promise}     Promise that resolves when the handshake is complete
    */
   sendHandshake (url) {
-    const childOrigin = resolveOrigin(url)
+  	if(!this.reconnect) {
+    	this.__childOrigin = resolveOrigin(url)
+    }
+    const childOrigin = this.__childOrigin;
     let attempt = 0
     let responseInterval
+    
     return new Postmate.Promise((resolve, reject) => {
       const reply = (e) => {
         if (!sanitize(e, childOrigin)) return false
@@ -295,6 +315,7 @@ class Postmate {
           if (process.env.NODE_ENV !== 'production') {
             log('Parent: Received handshake reply from Child')
           }
+          this.reconnect = true
           this.parent.removeEventListener('message', reply, false)
           this.childOrigin = e.origin
           if (process.env.NODE_ENV !== 'production') {
@@ -310,8 +331,6 @@ class Postmate {
         }
         return reject('Failed handshake')
       }
-
-      this.parent.addEventListener('message', reply, false)
 
       const doSend = () => {
         attempt++
@@ -330,20 +349,26 @@ class Postmate {
       }
 
       const loaded = () => {
+      	attempt = 0
+      	this.parent.addEventListener('message', reply, false)
+      	
         doSend()
         responseInterval = setInterval(doSend, 500)
       }
 
-      if (this.frame.attachEvent) {
-        this.frame.attachEvent('onload', loaded)
-      } else {
-        this.frame.addEventListener('load', loaded)
-      }
+      if(!this.reconnect) {
+	      if(this.frame.attachEvent) {
+	        this.frame.attachEvent('onload', loaded)
+	      }
+	      else {
+	        this.frame.addEventListener('load', loaded)
+	      }
 
-      if (process.env.NODE_ENV !== 'production') {
-        log('Parent: Loading frame', { url })
+	      if (process.env.NODE_ENV !== 'production') {
+	        log('Parent: Loading frame', { url })
+	      }
+      	this.frame.src = url
       }
-      this.frame.src = url
     })
   }
 }
