@@ -196,6 +196,22 @@
       this.events[eventName].push(callback);
     };
 
+    _proto.off = function off(eventName, callback) {
+      var index = -1;
+
+      if (this.events[eventName] && (index = this.events[eventName].indexOf(callback)) > -1) {
+        this.events[eventName].splice(index, 1);
+      }
+    };
+
+    _proto.deconnect = function deconnect() {
+      {
+        log('Parent: Deconnecting Postmate instance');
+      }
+
+      window.removeEventListener('message', this.listener, false);
+    };
+
     _proto.destroy = function destroy() {
       {
         log('Parent: Destroying Postmate instance');
@@ -326,7 +342,11 @@
     _proto3.sendHandshake = function sendHandshake(url) {
       var _this4 = this;
 
-      var childOrigin = resolveOrigin(url);
+      if (!this.reconnect) {
+        this.__childOrigin = resolveOrigin(url);
+      }
+
+      var childOrigin = this.__childOrigin;
       var attempt = 0;
       var responseInterval;
       return new Postmate.Promise(function (resolve, reject) {
@@ -339,6 +359,8 @@
             {
               log('Parent: Received handshake reply from Child');
             }
+
+            _this4.reconnect = true;
 
             _this4.parent.removeEventListener('message', reply, false);
 
@@ -359,8 +381,6 @@
 
           return reject('Failed handshake');
         };
-
-        _this4.parent.addEventListener('message', reply, false);
 
         var doSend = function doSend() {
           attempt++;
@@ -383,23 +403,29 @@
         };
 
         var loaded = function loaded() {
+          attempt = 0;
+
+          _this4.parent.addEventListener('message', reply, false);
+
           doSend();
           responseInterval = setInterval(doSend, 500);
         };
 
-        if (_this4.frame.attachEvent) {
-          _this4.frame.attachEvent('onload', loaded);
-        } else {
-          _this4.frame.addEventListener('load', loaded);
-        }
+        if (!_this4.reconnect) {
+          if (_this4.frame.attachEvent) {
+            _this4.frame.attachEvent('onload', loaded);
+          } else {
+            _this4.frame.addEventListener('load', loaded);
+          }
 
-        {
-          log('Parent: Loading frame', {
-            url: url
-          });
-        }
+          {
+            log('Parent: Loading frame', {
+              url: url
+            });
+          }
 
-        _this4.frame.src = url;
+          _this4.frame.src = url;
+        }
       });
     };
 
