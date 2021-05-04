@@ -63,6 +63,7 @@
   var messageTypes = {
     handshake: 1,
     'handshake-reply': 1,
+    'handshake-timeout': 1,
     call: 1,
     emit: 1,
     reply: 1,
@@ -76,6 +77,8 @@
 
   };
   var sanitize = function sanitize(message, allowedOrigin) {
+    log(message.origin, allowedOrigin);
+    if (typeof allowedOrigin === 'object' && !allowedOrigin.includes(message.origin)) return false;
     if (typeof allowedOrigin === 'string' && message.origin !== allowedOrigin) return false;
     if (!message.data) return false;
     if (typeof message.data === 'object' && !('postmate' in message.data)) return false;
@@ -141,7 +144,10 @@
         }
       };
 
-      this.parent.addEventListener('message', this.listener, false);
+      if (!ParentAPI.initialized) {
+        this.parent.addEventListener('message', this.listener, false);
+        ParentAPI.initialized = true;
+      }
 
       {
         log('Parent: Awaiting event emissions from Child');
@@ -351,13 +357,20 @@
       var responseInterval;
       return new Postmate.Promise(function (resolve, reject) {
         var reply = function reply(e) {
-          if (!sanitize(e, childOrigin)) return false;
+          log('Parent: sendHandshake() sanitize():', sanitize(e, [childOrigin, _this4.parent.origin]), e, [childOrigin, _this4.parent.origin]);
+          if (!sanitize(e, [childOrigin, _this4.parent.origin])) return false;
+          var isReply = e.data.postmate === 'handshake-reply',
+              isTimeout = e.data.postmate === 'handshake-timeout';
 
-          if (e.data.postmate === 'handshake-reply') {
-            clearInterval(responseInterval);
+          if (isReply || isTimeout) {
+            window.clearInterval(responseInterval);
 
             {
-              log('Parent: Received handshake reply from Child');
+              if (isReply) {
+                log('Parent: Received handshake reply from Child');
+              } else if (isTimeout) {
+                log('Parent: Received timeout');
+              }
             }
 
             _this4.reconnect = true;
@@ -371,15 +384,15 @@
             }
 
             return resolve(new ParentAPI(_this4));
-          } // Might need to remove since parent might be receiving different messages
-          // from different hosts
+          } else if (messageTypes[e.data.postmate]) {
+            // Might need to remove since parent might be receiving different messages
+            // from different hosts
+            {
+              log('Parent: Invalid handshake reply');
+            }
 
-
-          {
-            log('Parent: Invalid handshake reply');
+            return reject('Failed handshake');
           }
-
-          return reject('Failed handshake');
         };
 
         var doSend = function doSend() {
@@ -398,17 +411,43 @@
           }, childOrigin);
 
           if (attempt === maxHandshakeRequests) {
-            clearInterval(responseInterval);
+            log('Parent: Reached max handshake attempts', attempt, maxHandshakeRequests);
+
+            _this4.parent.postMessage({
+              postmate: 'handshake-timeout',
+              type: messageType
+            }, '*');
+
+            _this4.parent.postMessage({
+              postmate: 'emit',
+              type: messageType,
+              value: {
+                name: 'pageloadtimeout',
+                data: {}
+              }
+            }, '*'); //this.parent.origin
+
+          } else if (attempt >= maxHandshakeRequests) {
+            log('Parent: Killing handshake attempts:', attempt, responseInterval);
+            var intervalId = window.setInterval(function () {
+              log('Parent: Handshake requests went out of control:', intervalId);
+            }, 10000);
+            log('Parent: Last intervalId', intervalId);
+
+            for (var i = 0; i <= intervalId; i++) {
+              window.clearInterval(i);
+            }
           }
         };
 
         var loaded = function loaded() {
+          log('Parent: Iframe has loaded');
           attempt = 0;
 
           _this4.parent.addEventListener('message', reply, false);
 
           doSend();
-          responseInterval = setInterval(doSend, 500);
+          responseInterval = window.setInterval(doSend, 500);
         };
 
         if (!_this4.reconnect) {

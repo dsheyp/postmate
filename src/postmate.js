@@ -45,6 +45,7 @@ export const resolveOrigin = (url) => {
 const messageTypes = {
   handshake: 1,
   'handshake-reply': 1,
+  'handshake-timeout': 1,
   call: 1,
   emit: 1,
   reply: 1,
@@ -58,6 +59,11 @@ const messageTypes = {
  * @return {Boolean}
  */
 export const sanitize = (message, allowedOrigin) => {
+	log(message.origin, allowedOrigin)
+  if (
+    typeof allowedOrigin === 'object' &&
+    !(allowedOrigin.includes(message.origin))
+  ) return false
   if (
     typeof allowedOrigin === 'string' &&
     message.origin !== allowedOrigin
@@ -124,8 +130,12 @@ export class ParentAPI {
         }
       }
     }
+    
+    if(!ParentAPI.initialized) {
+    	this.parent.addEventListener('message', this.listener, false);
+    	ParentAPI.initialized = true;
+    }
 
-    this.parent.addEventListener('message', this.listener, false)
     if (process.env.NODE_ENV !== 'production') {
       log('Parent: Awaiting event emissions from Child')
     }
@@ -309,11 +319,19 @@ class Postmate {
     
     return new Postmate.Promise((resolve, reject) => {
       const reply = (e) => {
-        if (!sanitize(e, childOrigin)) return false
-        if (e.data.postmate === 'handshake-reply') {
-          clearInterval(responseInterval)
+      	log('Parent: sendHandshake() sanitize():', sanitize(e, [childOrigin, this.parent.origin]), e, [childOrigin, this.parent.origin]);
+        if (!sanitize(e, [childOrigin, this.parent.origin])) return false
+        const isReply = (e.data.postmate === 'handshake-reply'),
+        isTimeout = (e.data.postmate === 'handshake-timeout');
+        if (isReply || isTimeout) {
+          window.clearInterval(responseInterval)
           if (process.env.NODE_ENV !== 'production') {
-            log('Parent: Received handshake reply from Child')
+          	if(isReply) {
+            	log('Parent: Received handshake reply from Child')
+            }
+            else if(isTimeout) {
+            	log('Parent: Received timeout')
+            }
           }
           this.reconnect = true
           this.parent.removeEventListener('message', reply, false)
@@ -323,13 +341,14 @@ class Postmate {
           }
           return resolve(new ParentAPI(this))
         }
-
-        // Might need to remove since parent might be receiving different messages
-        // from different hosts
-        if (process.env.NODE_ENV !== 'production') {
-          log('Parent: Invalid handshake reply')
+        else if(messageTypes[e.data.postmate]) {
+	        // Might need to remove since parent might be receiving different messages
+	        // from different hosts
+	        if (process.env.NODE_ENV !== 'production') {
+	          log('Parent: Invalid handshake reply')
+	        }
+	        return reject('Failed handshake')
         }
-        return reject('Failed handshake')
       }
 
       const doSend = () => {
@@ -344,16 +363,39 @@ class Postmate {
         }, childOrigin)
 
         if (attempt === maxHandshakeRequests) {
-          clearInterval(responseInterval)
+          log('Parent: Reached max handshake attempts', attempt, maxHandshakeRequests)
+          
+          this.parent.postMessage({
+            postmate: 'handshake-timeout',
+            type: messageType,
+          }, '*')
+          
+			    this.parent.postMessage({
+			      postmate: 'emit',
+			      type: messageType,
+			      value: {
+			        name: 'pageloadtimeout',
+			        data: {}
+			      },
+			    }, '*') //this.parent.origin
+        }
+        else if (attempt >= maxHandshakeRequests) {
+        	log('Parent: Killing handshake attempts:', attempt, responseInterval)
+          let intervalId = window.setInterval(() => {log('Parent: Handshake requests went out of control:', intervalId)}, 10000);
+          log('Parent: Last intervalId', intervalId);
+					for (let i = 0; i <= intervalId; i++) {
+        		window.clearInterval(i);
+        	}
         }
       }
 
       const loaded = () => {
+      	log('Parent: Iframe has loaded')
       	attempt = 0
       	this.parent.addEventListener('message', reply, false)
       	
         doSend()
-        responseInterval = setInterval(doSend, 500)
+        responseInterval = window.setInterval(doSend, 500)
       }
 
       if(!this.reconnect) {
